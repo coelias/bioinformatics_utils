@@ -53,24 +53,6 @@ optional arguments:
                        provided folder [Opt]
 ```
 
-**lsum** - du improved, allows to recursively explore dirs and outputs summary by extension
-
-```
-$ echo . | lsum 
-::::::::::::::::::::::::::::::::::
-Total Files: 159
-Total size: 231.09 Kb
-::::::::::::::::::::::::::::::::::
-extension summary:
-pyc: 9.30 Kb
-fq: 11.99 Kb
-py: 44.68 Kb
-NOEXTENSION: 163.56 Kb
-
-1 of files (%1 smallest): 1.55 Kb
-::::::::::::::::::::::::::::::::::
-```
-
 **mapar** - parallel ported to python (parallel sometimes stops!! this doesn't)
 ```
 $ mapar --help
@@ -86,7 +68,7 @@ optional arguments:
   -s          supress stdout and stderr and show progress
 ```
 
-**mappinginfo.py** - tool to generate mapping sattistics from BAM or VCF (see help)
+**mappinginfo.py** - tool to generate mapping statistics from BAM or VCF (see help)
 
 ```
 $ mappinginfo.py --help
@@ -150,8 +132,6 @@ optional arguments:
   -n          Use only if massive number of accession numbers, will download
               ncbidbs
 ```
-
-**lols** - Amazing tool, naive replacement for ls that can list folder with gazillion of files in no time, even before you press enter. ('make lols' will create the executable, usage: 'lols DIRTOLIST')
 
 **clim** - Replacement for column command, works much better. (basically a tablify, but super awesome) 
 
