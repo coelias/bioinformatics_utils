@@ -1,0 +1,61 @@
+#!/usr/bin/python
+
+import sys
+import gzip
+import bz2
+
+def info(title,istream):
+	contigs={}
+	current=None
+	
+	for i in istream:	
+		i=i.strip()
+		if i.startswith(">"):
+			current=i
+			contigs.setdefault(i,0)
+		else: contigs[current]+=len(i)
+
+	lens=contigs.values()
+	lens.sort(reverse=True)
+	totsize=sum(lens)
+	
+	acum=0
+	n50=None
+	for i in lens:
+		acum+=i
+		if acum>=totsize/2:
+			n50=i
+			break
+
+	if CSV:
+		print "\t".join([str(i) for i in [title,n50,totsize,len(lens),max(lens)]])
+	else:
+		print "<{0}>".format(title)
+		print "N50:",n50
+		print "Genome Size:",totsize
+		print "Contigs:",len(lens)
+		print "Largest contig:",max(lens)
+		print "-------------------------"
+
+CSV=False
+if "-c" in sys.argv or len(sys.argv[1:])>1:
+	sys.argv.remove("-c")
+	CSV=True
+	print "sample\tn50\tnbases\tcontigs\tlargestContig"
+
+if len(sys.argv)>1:
+	for i in sys.argv[1:]:
+#		try:
+			if i.lower().endswith("gz"):
+				info(i,gzip.GzipFile(i))
+			elif i.lower().endswith("bz2"):
+				info(i,bz2.BZ2File(i))
+			else:
+				info(i,open(i))
+#		except:
+#			print "Error with",i
+else:
+	info("stdin",sys.stdin)
+
+
+

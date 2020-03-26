@@ -1,0 +1,400 @@
+#!/usr/local/bin/python
+import sys
+from Bio import SeqIO,Entrez,SeqRecord,Seq
+import argparse
+import re
+import itertools
+import os
+import collections
+import tempfile
+import time
+from array import array
+from random import random,choice,randint
+
+
+class NcbiFetch:
+	def __init__(self,query,db="nucleotide",max=3000,minl=None,maxl=None,desc=None):
+		self.db=db
+		self.query=query
+		Entrez.email = "carlos.delojoelias@ndm.ox.ac.uk"
+		handle = Entrez.esearch(db=self.db, retmax=max, term=query)
+
+		ids=Entrez.read(handle)["IdList"]
+		self.ids=[]
+		while ids:
+			nxt,ids=ids[:500],ids[500:]
+			records=Entrez.parse(Entrez.esummary(db="Nucleotide",id=",".join(nxt)),validate=False)
+			if minl: records=[i for i in records if i['Length']>=minl]
+			if maxl: records=[i for i in records if i['Length']<=maxl]
+			if desc:
+				desc=re.compile(desc)
+				records=[i for i in records if desc.findall(i["Title"],re.I)]
+			self.ids+=records
+
+			sys.stderr.write("\rToFetch: {0}/Kept: {1}".format(len(ids),len(self.ids)))
+			sys.stderr.flush()
+		self.ids=[i['Id'] for i in self.ids]
+		sys.stderr.write("Fetching {0} results (max {1})\n".format(len(self.ids),max))
+
+	def __iter__(self):
+		k=0
+		for i in self.ids:
+			try:
+				handle = Entrez.efetch(db=self.db, id=i, rettype="fasta", retmode="text")
+				seq=[i for i in SeqIO.parse(handle,"fasta")][0]
+				k+=1
+				sys.stderr.write("\r{0}/{1}".format(k,len(self.ids)))
+				yield seq
+			except KeyboardInterrupt:
+				print "Aborting..."
+				sys.exit(-1)
+			except:
+				continue
+		sys.stderr.write("\n")
+
+class FastaIterator:
+	def __init__(self,path):
+		if path=="-":
+			fd=sys.stdin
+		else:
+			fd=open(path)
+
+		self.fasta=SeqIO.parse(fd,"fasta")
+
+	def __iter__(self):
+		for i in self.fasta:
+			yield i
+
+class LengthFilter:
+	def __init__(self,source,minlength,maxlength):
+		self.source=source
+		self.min=minlength
+		self.max=maxlength
+
+	def __iter__(self):
+		for i in self.source:
+			if self.min and len(i)<self.min: continue
+			if self.max and len(i)>self.max: continue
+			yield i
+
+class FragmentFilter:
+	def __init__(self,source,pars):
+		fpr,min,max=pars.split(',')
+
+		self.source=source
+		self.fpr=int(fpr)
+		self.minsize=int(min)
+		self.maxsize=int(max)
+
+	def __iter__(self):
+		for read in self.source:
+			if not self.fpr:
+			    yield read
+			else:
+				for nf in xrange(self.fpr):
+					lenread=len(read)
+					sz=randint(self.minsize,self.maxsize)
+					randompos=randint(0,lenread-sz)
+					sq=read.seq[randompos:randompos+sz]
+					desc=read.description+" fragment[{}]".format(nf)
+					sr=SeqRecord.SeqRecord(sq)
+					sr.name=sr.id=sr.description=desc
+					yield sr
+
+class NoiseFilter:
+	def __init__(self,source,noise):
+		self.noise=float(noise)	
+		self.source=source
+
+	def addNoise(self,seq):
+	    seq=array('c',seq.upper())
+	    d=dict({'A':'CTG','C':'ATG','T':'ACG','G':'ACT','N':'ACTG'})
+	    pos=0
+	    for i in seq:
+		if random()<=self.noise and i in 'ACTGN':
+		    seq[pos]=choice(d[i])
+		pos+=1
+
+	    return seq.tostring()
+
+	def __iter__(self):
+		for read in self.source:
+			if not self.noise:
+				yield read
+			else:
+				read.seq=self.addNoise(str(read.seq))
+				yield read
+
+
+
+
+
+class DescFilter:
+	def __init__(self,source,desc,reverse=False,group_folder=None):
+		self.source=source
+		self.desc=None if not desc else re.compile(desc,re.I)
+		self.reverse=reverse
+		self.gfolder=group_folder
+
+	def __iter__(self):
+		if self.gfolder:
+			for i in self.source:
+				matchvals=self.desc.findall(i.description)
+				outfile=os.path.join(self.gfolder,"NON_MATCHING.fa")
+				if matchvals:
+					if type(matchvals[0])==str:
+						outfile=os.path.join(self.gfolder,matchvals[0].replace(" ","_"))
+					elif type(matchvals[0])==tuple:
+						outfile=os.path.join(self.gfolder,"_".join(matchvals[0]))
+						
+				a=open(outfile,"a")
+				a.write(">{0}\n{1}\n".format(i.description,str(i.seq)))
+				a.close()
+		else:
+			for i in self.source:
+				if self.desc:
+					matchvals=self.desc.findall(i.description)
+					if not self.reverse:
+						if not matchvals: continue
+					else:
+						if matchvals: continue
+				yield i
+
+class LengthListing:
+	def __init__(self,source,active=False):
+		self.source=source
+		self.active=active
+
+	def __iter__(self):
+		lengths=[]
+		if not self.active:
+			for i in self.source:
+				yield i
+		else:
+			for i in self.source:
+				yield i
+				print len(i)
+
+
+class GCListing:
+	def __init__(self,source,active=False):
+		self.source=source
+		self.active=active
+
+	def __iter__(self):
+		gcs=[]
+		if not self.active:
+			for i in self.source:
+				yield i
+		else:
+			for i in self.source:
+				yield i
+                                sq=str(i.seq).upper()
+                                gc=(sq.count('C')+sq.count('G'))/float(len(i))
+                                print gc
+
+class StatsFilter:
+	def __init__(self,source,active=False):
+		self.source=source
+		self.active=active
+
+	def __iter__(self):
+		lengths=[]
+		head=[]
+		tail=[]
+	
+		if not self.active:
+			for i in self.source:
+				yield i
+		else:
+			for i in self.source:
+				yield i
+				lengths.append(len(i))
+				head.append(str(i.seq[:10]))
+				tail.append(str(i.seq[-10:]))
+
+			html=tempfile.NamedTemporaryFile(suffix=".html")
+			maxlen=max(lengths)
+			minlen=min(lengths)
+			html.write( "{0} sequences<br><br>\n".format(len(lengths)))
+			lengthsdist=sorted(collections.Counter(lengths).items(),key=lambda x: x[1],reverse=True)[:10]
+			html.write( "Most common lengths<br>\n")
+			for i in lengthsdist:
+				html.write( str(i)+"<br>\n")
+
+			html.write( "<br>MaxLength {0}<br>\n".format(maxlen))
+			html.write( "MinLength {0}<br>\n".format(minlen))
+
+			try:
+				import matplotlib.pyplot as plt
+				from base64 import b64encode
+
+				png=tempfile.NamedTemporaryFile(suffix=".png")
+
+				steps=maxlen-minlen
+				if steps>100: steps=100
+				step=float(maxlen-minlen)/steps
+
+				bins=[minlen]
+				while minlen<maxlen:
+					minlen+=step
+					bins.append(minlen)
+
+				plt.hist(lengths,bins=bins)
+				plt.savefig(png.name)
+
+				html.write("<br><img src='data:image/png;base64,{0}'><br>".format(b64encode(open(png.name).read())))
+			except:
+				pass
+
+			head=sorted(collections.Counter(head).items(),key=lambda x:x[1],reverse=True)
+			tail=sorted(collections.Counter(tail).items(),key=lambda x:x[1],reverse=True)
+
+			html.write("starting:<br>")
+			for i in head[:20]:
+				html.write("{0} - {1}<br>\n".format(i[0],i[1]))
+			html.write("ending:<br>")
+			for i in tail[:20]:
+				html.write("{0} - {1}<br>\n".format(i[0],i[1]))
+
+			html.flush()
+			if os.system("xdg-open {0}".format(html.name)):
+				os.system("open {0}".format(html.name))
+			time.sleep(2)
+
+	def getNt(self,d,cutoff):
+		tot=sum([i[1] for i in d])
+		if (float(d[0][1])/tot)*100>=cutoff:
+			return d[0][0]
+		return "N"
+
+
+
+
+class FastaExtract:
+	def __init__(self,source,pattern):
+		self.source=source
+		if not pattern:
+			self.pattern=None
+		else:
+			self.pattern=re.findall("^([0-9]+),([actg]+),([0-9]+),([actg]+)(,D)?$",pattern,re.I)
+			if not self.pattern: 
+				print "FATAL ERROR: Invalid format in pattern ({0})".format(pattern)
+				sys.exit(-1)
+			self.mism1,self.substr1,self.mism2,self.substr2,self.DEBUG=self.pattern[0]
+
+			self.substr1r=tre.compile(Seq.reverse_complement(self.substr1).upper())
+			self.substr2r=tre.compile(Seq.reverse_complement(self.substr2).upper())
+			self.substr1=tre.compile(self.substr1.upper())
+			self.substr2=tre.compile(self.substr2.upper())
+
+	def __iter__(self):
+		if self.pattern:
+			fz1 = tre.Fuzzyness(maxerr = int(self.mism1))
+			fz2 = tre.Fuzzyness(maxerr = int(self.mism2))
+
+		total=0
+		found=0
+
+		for i in self.source:
+			total+=1
+			seq=str(i.seq)
+			seqr=Seq.reverse_complement(i.seq)
+
+			if self.pattern:
+				m1=self.substr1.search(seq,fz1)
+				m2=self.substr2.search(seq,fz2)
+				theSeq=seq
+				if not (m1 and m2):
+					m1=self.substr1r.search(seq,fz1)
+					m2=self.substr2r.search(seq,fz2)
+					theSeq=seq
+				if not (m1 and m2):
+					m1=self.substr1.search(seqr,fz1)
+					m2=self.substr2.search(seqr,fz2)
+					theSeq=seqr
+				if not (m1 and m2):
+					m1=self.substr1r.search(seqr,fz1)
+					m2=self.substr2r.search(seqr,fz2)
+					theSeq=seqr
+
+				if m1 and m2:
+					found+=1
+					if self.DEBUG:
+						print "Seq1 ({0}) - Seq2 ({1}) ({2}/{3})".format(len(m1.groups()),len(m2.groups()),found,total)
+					else:
+						g1,g2=m1.groups()[0],m2.groups()[0]
+						if g1[0]>g2[0]: g1,g2=g2,g1
+						yield SeqRecord.SeqRecord(theSeq[g1[0]:g2[1]],description=i.description)
+			else:
+				yield i
+
+
+
+if __name__=="__main__":
+	parser = argparse.ArgumentParser(description='FastaFilter')
+	
+	parser.add_argument("-min", dest="minsize",help="Minimum Sequence length [Opt]",required=False,type=int,default=0)
+	parser.add_argument("-max", dest="maxsize",help="Maximum sequence length [Opt]",required=False,type=int,default=0)
+	parser.add_argument("-desc", dest="desc",help="Filter by description string (regexp) [Opt]",required=False,default="")
+	parser.add_argument("-extract", dest="PATTERN",help="Extracts a region of the FastA, defined by two subsequences and a number of mismatches (fuzzy regexp). For Example -extract 2,CAGCATA,3,AAAATAGA (Extract subsequences delimited by CAGCATA and AAAATAGA allowing 2 and 3 mismatches repectively, if you add a D [DEBUG] (eg. (1,ATG,1,CTG,D) the script will only print the number of matches for every sequence [Opt]",required=False)
+	parser.add_argument("-fetch", dest="fetch",help="NCBI query [Opt]",required=False)
+	parser.add_argument("-db", dest="db",help="NCBI database [nucleotide]",required=False,default="nucleotide")
+	parser.add_argument("-maxres", dest="maxres",help="NCBI max number of results [3000]",required=False,default=3000, type=int)
+	parser.add_argument("-r", dest="reverse",help="Reverse description filter",required=False,default=False,action="store_true")
+	parser.add_argument("-stats", dest="stats",help="HTML Statistic information",required=False,default=False,action="store_true")
+	parser.add_argument("-lengths", dest="lengths",help="Display lengths of all sequences",required=False,default=False,action="store_true")
+	parser.add_argument("-gc", dest="gc",help="Display GC content for all sequences",required=False,default=False,action="store_true")
+	parser.add_argument("-o", dest="output",help="Output file [stdout]",required=False,default="-")
+	parser.add_argument("--noise", dest="noise",help="Adds noise to the sequences [muts/base][eg 0.01]",required=False,type=float,default=0)
+	parser.add_argument("--fragment", dest="fragment",help="Return a random fragments [eg: 3,50,10 (three random fragments per read between 50 and 100 bp)]",required=False,type=str,default="0,0,0")
+	parser.add_argument("-group", dest="GFOLDER",help="Group sequences my -desc regexp and stores them in the provided folder [Opt]",required=False,type=lambda x: x if os.path.isdir(x) else parser.error("-group should be an existing folder"))
+
+	parser.add_argument("fastas", nargs='*',default=["-"])
+
+	options = parser.parse_args()
+
+	if options.PATTERN:
+		try:
+			import tre
+		except:
+			print "tre library not installed :S. Install it to use -extract feature :)"
+			sys.exit(-1)
+
+	if not options.fetch and options.fastas==["-"]:
+		sys.stderr.write("Reading from <stdin>, use --help for HELP\n\n")
+
+	if options.GFOLDER and not options.desc:
+		print "FATAL ERROR: -desc parameter is required if -group is specified!"
+		sys.exit(-1)
+
+	if options.output=="-":
+		output=sys.stdout
+	else:
+		output=open(options.output,"w")
+
+	MODULES=[(FastaExtract,(options.PATTERN,)),
+			 (LengthFilter,(options.minsize,options.maxsize)),
+			 (DescFilter,(options.desc,options.reverse,options.GFOLDER)),
+			 (FragmentFilter,(options.fragment,)),
+			 (NoiseFilter,(options.noise,)),
+			 (StatsFilter,(options.stats,)),
+			 (LengthListing,(options.lengths,)),
+			 (GCListing,(options.gc,))
+			]
+
+	if options.fetch:
+		inp=[NcbiFetch(options.fetch,options.db,options.maxres,options.minsize,options.maxsize,options.desc)]
+	else:
+		inp=[FastaIterator(i) for i in options.fastas]
+
+	fastainput=[]
+	for obj in inp:
+		for plugin,params in MODULES:
+			obj=plugin(obj,*params)
+		fastainput.append(obj)
+
+	for record in itertools.chain(*fastainput):
+		if not options.stats and not options.lengths and not options.gc:
+			output.write(">{0}\n{1}\n".format(record.description,str(record.seq)))
+

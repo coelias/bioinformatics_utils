@@ -1,0 +1,112 @@
+#!/usr/bin/python
+import sys
+import os
+import Queue
+import threading
+import argparse
+import subprocess
+import shlex
+import time
+import signal
+
+parser = argparse.ArgumentParser(description='Carlos parallelizer')
+parser.add_argument('-t', dest="threads",help="Number of processes (defaut #cpu processors)",type=int,default=0)
+parser.add_argument('-o', dest="stdout",help="redirect stdout to a file [and prints progress]")
+parser.add_argument('-e', dest="stderr",help="redirect stderr to a file [and prints progress]")
+parser.add_argument('-s', dest="supress",help="supress stdout and stderr and show progress",default=False,action='store_true')
+
+args = parser.parse_args()
+
+if not args.threads:
+    args.threads=int(dict([map(str.strip,i.strip().split(":",2)) for i in open("/proc/cpuinfo").readlines() if ":" in i])["processor"])+1
+
+stderr=stdout=None
+if args.stderr:
+    stderr=open(args.stderr,"w")
+if args.stdout:
+    stdout=open(args.stdout,"w")
+if args.supress:
+    stderr=stdout=open("/dev/null","w")
+
+JOBQ=Queue.Queue()
+WLOCK=threading.RLock()
+KILL=False
+TOTALTASKS=0
+
+def signal_handler(signal, frame):
+    global KILL
+    KILL=True
+
+signal.signal(signal.SIGINT, signal_handler)
+
+def Worker(out,err):
+
+    global JOBQ
+    global KILL
+    while True and not KILL:
+        job=JOBQ.get()
+        if job=="DIEMOFO": 
+            JOBQ.task_done()
+            return
+        try:
+            s=subprocess.Popen(shlex.split(job),stderr=subprocess.PIPE,stdout=subprocess.PIPE)
+            _out,_err=s.communicate()
+            with WLOCK:
+                if out: 
+                    out.write(_out)
+                    out.flush()
+                if err: 
+                    err.write(_err)
+                    err.flush()
+                            
+        except:
+            sys.stderr.write("Error executing command [{0}]".format(job))
+            continue
+        while s.poll()==None:
+            if KILL:
+                s.kill()
+                return
+
+            time.sleep(.5)
+
+        JOBQ.task_done()
+
+def feeder(nthreads):
+    global TOTALTASKS
+    for i in sys.stdin:
+        JOBQ.put(i.strip())
+        TOTALTASKS+=1
+
+    for i in range(nthreads):
+        JOBQ.put("DIEMOFO")
+    
+
+threads=[]
+
+for i in range(args.threads):
+    t=threading.Thread(target=Worker,kwargs={'out':stdout,'err':stderr})
+    t.start()
+    threads.append(t)
+
+feeder_thread=threading.Thread(target=feeder,kwargs={'nthreads':args.threads})
+feeder_thread.start()
+
+while True and not KILL:
+    time.sleep(.5)
+    left=JOBQ.qsize()-args.threads
+
+    if left<0:
+        break
+
+    if stderr:
+        sys.stderr.write("\r{0}/{1}".format(left,TOTALTASKS))
+        sys.stderr.flush()
+        continue
+    if stdout:
+        sys.stdout.write("\r{0}/{1}".format(left,TOTALTASKS))
+        sys.stdout.flush()
+
+for i in threads:
+    i.join()
+
+feeder_thread.join()

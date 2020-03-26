@@ -1,0 +1,18 @@
+#!/usr/bin/python
+import sys
+import hashlib
+import pysam
+
+if len(sys.argv)==1:
+	print "Usage: bammd5 <file>"
+	sys.exit(0)
+
+files=sys.argv[1:]
+
+md5s=[]
+for i in files:
+	crc=hashlib.md5()
+	for k in pysam.Samfile(i):
+		crc.update(k.qname+k.seq+k.qual)
+	print i,crc.hexdigest()
+

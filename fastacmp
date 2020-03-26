@@ -1,0 +1,34 @@
+#!/usr/bin/python
+from Bio import SeqIO
+import gzip
+from itertools import izip
+import sys
+
+if len(sys.argv)!=3:
+	print "usage: python {0} fastafile1 fastafile2 (gzip files allowed)".format(sys.argv[0])
+	sys.exit(-1)
+
+def readFasta(f):
+	if "gz" in f.lower() or "gzip" in f.lower():
+		f=gzip.GzipFile(f)
+	return SeqIO.read(f,"fasta")
+
+f1,f2=readFasta(sys.argv[1]),readFasta(sys.argv[2])
+nc1=nc2=same=diff=c1=c2=0
+k=0
+for i,j in izip(f1,f2):
+	k+=1
+	if i in "ACTG" and j not in "ACTG": nc2+=1
+	elif j in "ACTG" and i not in "ACTG": nc1+=1
+	elif i in "ACTG" and j in "ACTG":
+		if i==j: same+=1
+		else: diff+=1
+	if i in "ACTG": c1+=1
+	if j in "ACTG": c2+=1
+
+print "Called bases matching:",same,int((same/float(k))*100),"%"
+print "Called bases missmatching:",diff,int((diff/float(k))*100),"%"
+print "Called bases in {0}:".format(sys.argv[1]),c1,int((c1/float(k))*100),"%"
+print "Called bases in {0}:".format(sys.argv[2]),c2,int((c2/float(k))*100),"%"
+print "Non called bases ONLY in {0}:".format(sys.argv[1]),nc1,int((nc1/float(k))*100),"%"
+print "Non called bases ONLY in {0}:".format(sys.argv[2]),nc2,int((nc2/float(k))*100),"%"
